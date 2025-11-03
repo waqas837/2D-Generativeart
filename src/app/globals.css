@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --foreground-rgb: 0, 0, 0;
+    --background-start-rgb: 255, 255, 255;
+    --background-end-rgb: 248, 250, 252;
+  }
+} /* Add smooth scroll behavior */
+html {
+  scroll-behavior: smooth;
+}
+
+@layer components {
+  .section-title {
+    @apply text-3xl font-bold mb-8 text-gray-900 relative inline-block;
+  }
+
+  .section-title::after {
+    content: "";
+    @apply absolute left-0 -bottom-2 h-1 w-1/2 bg-purple-600;
+  }
+
+  .tech-icon {
+    @apply p-4 rounded-lg bg-white hover:bg-gray-50 transition-all duration-300 hover:scale-105 flex flex-col items-center justify-center gap-2 shadow-lg border border-gray-200;
+  }
+
+  .project-card {
+    @apply bg-white rounded-lg overflow-hidden transition-all duration-300 hover:transform hover:scale-[1.02] hover:shadow-xl hover:shadow-purple-900/20 border border-gray-200;
+  }
+}
