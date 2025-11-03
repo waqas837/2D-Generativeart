@@ -1,71 +1,138 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
-import { TESSELATION_TYPES, generateTessellation, SeededRandom } from '../utils/tessellations';
-import { PRESET_PALETTES, getTileColor } from '../utils/colorPalettes';
+import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
+import { TESSELATION_TYPES, generateTessellation } from '../utils/tessellations';
+import { PRESET_PALETTES } from '../utils/colorPalettes';
+import Tile from '../components/Tile';
+
+// Debounce hook
+function useDebounce(value, delay) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
+// Preset configurations
+const PRESETS = {
+  quick: { canvasWidth: 100, canvasHeight: 100, tileSize: 15, spacing: 3, seed: 12345 },
+  standard: { canvasWidth: 210, canvasHeight: 297, tileSize: 10, spacing: 2, seed: 12345 },
+  large: { canvasWidth: 297, canvasHeight: 420, tileSize: 8, spacing: 1.5, seed: 12345 },
+  detailed: { canvasWidth: 150, canvasHeight: 150, tileSize: 5, spacing: 1, seed: 12345 },
+};
 
 export default function GenerativeArtPage() {
   const [tessellationType, setTessellationType] = useState('square');
-  const [canvasWidth, setCanvasWidth] = useState(210); // A4 width in mm
-  const [canvasHeight, setCanvasHeight] = useState(297); // A4 height in mm
-  const [tileSize, setTileSize] = useState(10); // in mm
-  const [spacing, setSpacing] = useState(2); // in mm
+  const [canvasWidth, setCanvasWidth] = useState(210);
+  const [canvasHeight, setCanvasHeight] = useState(297);
+  const [tileSize, setTileSize] = useState(10);
+  const [spacing, setSpacing] = useState(2);
   const [seed, setSeed] = useState(12345);
   const [selectedPalette, setSelectedPalette] = useState('ocean');
   const [colorMode, setColorMode] = useState('hex');
   const [customPalette, setCustomPalette] = useState([]);
   const [paletteName, setPaletteName] = useState('Custom');
   const [showPaletteEditor, setShowPaletteEditor] = useState(false);
+  const [performanceMode, setPerformanceMode] = useState('balanced'); // fast, balanced, quality
   const svgRef = useRef(null);
-  const [tiles, setTiles] = useState([]);
 
-  // Convert mm to pixels (assuming 96 DPI = 3.779527559 pixels per mm)
-  const mmToPx = (mm) => mm * 3.779527559;
+  // Debounce inputs for performance
+  const debouncedCanvasWidth = useDebounce(canvasWidth, 300);
+  const debouncedCanvasHeight = useDebounce(canvasHeight, 300);
+  const debouncedTileSize = useDebounce(tileSize, 300);
+  const debouncedSpacing = useDebounce(spacing, 300);
 
-  // Generate tiles when parameters change
-  useEffect(() => {
-    const widthPx = mmToPx(canvasWidth);
-    const heightPx = mmToPx(canvasHeight);
-    const tileSizePx = mmToPx(tileSize);
-    const spacingPx = mmToPx(spacing);
+  // Convert mm to pixels
+  const mmToPx = useCallback((mm) => mm * 3.779527559, []);
 
-    const newTiles = generateTessellation(
+  // Get current palette
+  const currentPalette = useMemo(() => {
+    if (showPaletteEditor && customPalette.length > 0) {
+      return { name: paletteName, colors: customPalette, type: colorMode };
+    }
+    return PRESET_PALETTES[selectedPalette] || PRESET_PALETTES.ocean;
+  }, [showPaletteEditor, customPalette, paletteName, selectedPalette, colorMode]);
+
+  // Performance settings based on mode
+  const performanceSettings = useMemo(() => {
+    switch (performanceMode) {
+      case 'fast':
+        return { maxTiles: 2000, skipRender: false };
+      case 'balanced':
+        return { maxTiles: 5000, skipRender: false };
+      case 'quality':
+        return { maxTiles: 15000, skipRender: false };
+      default:
+        return { maxTiles: 5000, skipRender: false };
+    }
+  }, [performanceMode]);
+
+  // Generate tiles with memoization
+  const tiles = useMemo(() => {
+    const widthPx = mmToPx(debouncedCanvasWidth);
+    const heightPx = mmToPx(debouncedCanvasHeight);
+    const tileSizePx = mmToPx(debouncedTileSize);
+    const spacingPx = mmToPx(debouncedSpacing);
+
+    const effectiveMaxTiles = performanceSettings.maxTiles;
+
+    const generatedTiles = generateTessellation(
       tessellationType,
       widthPx,
       heightPx,
       tileSizePx,
       spacingPx,
-      seed
+      seed,
+      currentPalette,
+      colorMode,
+      effectiveMaxTiles
     );
-    setTiles(newTiles);
-  }, [tessellationType, canvasWidth, canvasHeight, tileSize, spacing, seed]);
 
-  // Get current palette
-  const getCurrentPalette = () => {
-    if (showPaletteEditor && customPalette.length > 0) {
-      return { name: paletteName, colors: customPalette, type: colorMode };
+    return generatedTiles;
+  }, [
+    tessellationType,
+    debouncedCanvasWidth,
+    debouncedCanvasHeight,
+    debouncedTileSize,
+    debouncedSpacing,
+    seed,
+    currentPalette,
+    colorMode,
+    performanceSettings.maxTiles,
+    mmToPx
+  ]);
+
+  // Apply preset
+  const applyPreset = useCallback((presetName) => {
+    const preset = PRESETS[presetName];
+    if (preset) {
+      setCanvasWidth(preset.canvasWidth);
+      setCanvasHeight(preset.canvasHeight);
+      setTileSize(preset.tileSize);
+      setSpacing(preset.spacing);
+      setSeed(preset.seed);
     }
-    return PRESET_PALETTES[selectedPalette] || PRESET_PALETTES.ocean;
-  };
-
-  const currentPalette = getCurrentPalette();
-  const random = new SeededRandom(seed);
+  }, []);
 
   // Export to SVG
-  const exportToSVG = () => {
+  const exportToSVG = useCallback(() => {
     const svg = svgRef.current;
     if (!svg) return;
 
     const serializer = new XMLSerializer();
     let svgString = serializer.serializeToString(svg);
     
-    // Add proper SVG namespace and dimensions in mm
     svgString = svgString.replace(
       '<svg',
       `<svg xmlns="http://www.w3.org/2000/svg" width="${canvasWidth}mm" height="${canvasHeight}mm" viewBox="0 0 ${mmToPx(canvasWidth)} ${mmToPx(canvasHeight)}"`
     );
 
-    // Create download link
     const blob = new Blob([svgString], { type: 'image/svg+xml' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -75,100 +142,25 @@ export default function GenerativeArtPage() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-  };
-
-  // Render a single tile as SVG
-  const renderTile = (tile) => {
-    const color = getTileColor(tile, currentPalette, colorMode, random);
-    const randomForTile = new SeededRandom(seed + tile.id.split('-').reduce((a, b) => parseInt(a) + parseInt(b), 0));
-
-    if (tile.type === 'square') {
-      return (
-        <g key={tile.id} transform={`translate(${tile.x},${tile.y}) rotate(${tile.rotation} ${tile.size/2} ${tile.size/2})`}>
-          <rect
-            x="0"
-            y="0"
-            width={tile.size}
-            height={tile.size}
-            fill={color}
-            stroke={colorMode === 'hex' ? '#ffffff' : 'hsv(0, 0%, 100%)'}
-            strokeWidth="0.5"
-            opacity={0.8 + randomForTile.random() * 0.2}
-          />
-        </g>
-      );
-    } else if (tile.type === 'triangle') {
-      const size = tile.size;
-      const points = [
-        `${size/2},0`,
-        `${size},${size}`,
-        `0,${size}`
-      ].join(' ');
-      return (
-        <g key={tile.id} transform={`translate(${tile.x},${tile.y}) rotate(${tile.rotation} ${size/2} ${size/2})`}>
-          <polygon
-            points={points}
-            fill={color}
-            stroke={colorMode === 'hex' ? '#ffffff' : 'hsv(0, 0%, 100%)'}
-            strokeWidth="0.5"
-            opacity={0.8 + randomForTile.random() * 0.2}
-          />
-        </g>
-      );
-    } else if (tile.type === 'hexagon') {
-      const radius = tile.radius;
-      const points = [];
-      for (let i = 0; i < 6; i++) {
-        const angle = (Math.PI / 3) * i;
-        points.push(`${radius + radius * Math.cos(angle)},${radius + radius * Math.sin(angle)}`);
-      }
-      return (
-        <g key={tile.id} transform={`translate(${tile.x},${tile.y}) rotate(${tile.rotation} ${radius} ${radius})`}>
-          <polygon
-            points={points.join(' ')}
-            fill={color}
-            stroke={colorMode === 'hex' ? '#ffffff' : 'hsv(0, 0%, 100%)'}
-            strokeWidth="0.5"
-            opacity={0.8 + randomForTile.random() * 0.2}
-          />
-        </g>
-      );
-    } else if (tile.type === 'rhombus') {
-      const size = tile.size;
-      const angle = (tile.angle * Math.PI) / 180;
-      const height = size * Math.sin(angle);
-      const points = [
-        `0,0`,
-        `${size},0`,
-        `${size + size * Math.cos(Math.PI - angle)},${height}`,
-        `${size * Math.cos(Math.PI - angle)},${height}`
-      ].join(' ');
-      return (
-        <g key={tile.id} transform={`translate(${tile.x},${tile.y}) rotate(${tile.rotation} ${size/2} ${height/2})`}>
-          <polygon
-            points={points}
-            fill={color}
-            stroke={colorMode === 'hex' ? '#ffffff' : 'hsv(0, 0%, 100%)'}
-            strokeWidth="0.5"
-            opacity={0.8 + randomForTile.random() * 0.2}
-          />
-        </g>
-      );
-    }
-    return null;
-  };
+  }, [canvasWidth, canvasHeight, tessellationType, mmToPx]);
 
   // Add color to custom palette
-  const addColorToPalette = (color) => {
+  const addColorToPalette = useCallback((color) => {
     if (customPalette.length < 10) {
-      setCustomPalette([...customPalette, color]);
+      setCustomPalette(prev => [...prev, color]);
     }
-  };
+  }, [customPalette.length]);
 
   // Remove color from custom palette
-  const removeColorFromPalette = (index) => {
-    setCustomPalette(customPalette.filter((_, i) => i !== index));
-  };
+  const removeColorFromPalette = useCallback((index) => {
+    setCustomPalette(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
+  // ViewBox for SVG
+  const viewBox = useMemo(() => 
+    `0 0 ${mmToPx(canvasWidth)} ${mmToPx(canvasHeight)}`,
+    [canvasWidth, canvasHeight, mmToPx]
+  );
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4">
@@ -178,10 +170,43 @@ export default function GenerativeArtPage() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Controls Panel */}
-          <div className="lg:col-span-1 space-y-6">
+          <div className="lg:col-span-1 space-y-4">
+            {/* Quick Presets */}
+            <div className="bg-gray-800 rounded-lg p-4">
+              <h2 className="text-xl font-semibold mb-3">Quick Presets</h2>
+              <div className="grid grid-cols-2 gap-2">
+                {Object.entries(PRESETS).map(([key, preset]) => (
+                  <button
+                    key={key}
+                    onClick={() => applyPreset(key)}
+                    className="bg-purple-600 hover:bg-purple-700 text-white py-2 px-3 rounded text-sm transition capitalize"
+                  >
+                    {key}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Performance Settings */}
+            <div className="bg-gray-800 rounded-lg p-4">
+              <h2 className="text-xl font-semibold mb-3">Performance</h2>
+              <select
+                value={performanceMode}
+                onChange={(e) => setPerformanceMode(e.target.value)}
+                className="w-full bg-gray-700 text-white p-2 rounded border border-gray-600 mb-2"
+              >
+                <option value="fast">Fast (≤2000 tiles)</option>
+                <option value="balanced">Balanced (≤5000 tiles)</option>
+                <option value="quality">Quality (≤15000 tiles)</option>
+              </select>
+              <p className="text-xs text-gray-400">
+                {tiles.length} tiles generated {tiles.length > performanceSettings.maxTiles ? '(limited)' : ''}
+              </p>
+            </div>
+
             {/* Tessellation Type */}
             <div className="bg-gray-800 rounded-lg p-4">
-              <h2 className="text-xl font-semibold mb-4">Tessellation Type</h2>
+              <h2 className="text-xl font-semibold mb-3">Tessellation Type</h2>
               <select
                 value={tessellationType}
                 onChange={(e) => setTessellationType(e.target.value)}
@@ -195,10 +220,10 @@ export default function GenerativeArtPage() {
 
             {/* Canvas Size */}
             <div className="bg-gray-800 rounded-lg p-4">
-              <h2 className="text-xl font-semibold mb-4">Canvas Size (mm)</h2>
-              <div className="space-y-3">
+              <h2 className="text-xl font-semibold mb-3">Canvas Size (mm)</h2>
+              <div className="space-y-2">
                 <div>
-                  <label className="block text-sm mb-1">Width (mm)</label>
+                  <label className="block text-sm mb-1">Width</label>
                   <input
                     type="number"
                     value={canvasWidth}
@@ -209,7 +234,7 @@ export default function GenerativeArtPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm mb-1">Height (mm)</label>
+                  <label className="block text-sm mb-1">Height</label>
                   <input
                     type="number"
                     value={canvasHeight}
@@ -219,9 +244,8 @@ export default function GenerativeArtPage() {
                     className="w-full bg-gray-700 text-white p-2 rounded border border-gray-600"
                   />
                 </div>
-                <div className="text-xs text-gray-400">
-                  Presets: <button onClick={() => { setCanvasWidth(210); setCanvasHeight(297); }} className="text-purple-400 hover:underline">A4</button>
-                  {' | '}
+                <div className="text-xs text-gray-400 flex gap-2">
+                  <button onClick={() => { setCanvasWidth(210); setCanvasHeight(297); }} className="text-purple-400 hover:underline">A4</button>
                   <button onClick={() => { setCanvasWidth(297); setCanvasHeight(420); }} className="text-purple-400 hover:underline">A3</button>
                 </div>
               </div>
@@ -229,10 +253,10 @@ export default function GenerativeArtPage() {
 
             {/* Tile Settings */}
             <div className="bg-gray-800 rounded-lg p-4">
-              <h2 className="text-xl font-semibold mb-4">Tile Settings</h2>
-              <div className="space-y-3">
+              <h2 className="text-xl font-semibold mb-3">Tile Settings</h2>
+              <div className="space-y-2">
                 <div>
-                  <label className="block text-sm mb-1">Tile Size (mm)</label>
+                  <label className="block text-sm mb-1">Size (mm)</label>
                   <input
                     type="number"
                     value={tileSize}
@@ -260,28 +284,27 @@ export default function GenerativeArtPage() {
 
             {/* Randomness */}
             <div className="bg-gray-800 rounded-lg p-4">
-              <h2 className="text-xl font-semibold mb-4">Randomness Seed</h2>
+              <h2 className="text-xl font-semibold mb-3">Randomness Seed</h2>
               <input
                 type="number"
                 value={seed}
                 onChange={(e) => setSeed(Number(e.target.value))}
-                className="w-full bg-gray-700 text-white p-2 rounded border border-gray-600"
+                className="w-full bg-gray-700 text-white p-2 rounded border border-gray-600 mb-2"
               />
               <button
                 onClick={() => setSeed(Math.floor(Math.random() * 100000))}
-                className="mt-2 w-full bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded transition"
+                className="w-full bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded transition"
               >
                 Random Seed
               </button>
-              <p className="text-xs text-gray-400 mt-2">Change seed to generate different patterns with same settings</p>
             </div>
 
             {/* Color Palette */}
             <div className="bg-gray-800 rounded-lg p-4">
-              <h2 className="text-xl font-semibold mb-4">Color Palette</h2>
-              <div className="space-y-3">
+              <h2 className="text-xl font-semibold mb-3">Color Palette</h2>
+              <div className="space-y-2">
                 <div>
-                  <label className="block text-sm mb-1">Preset Palettes</label>
+                  <label className="block text-sm mb-1">Preset</label>
                   <select
                     value={selectedPalette}
                     onChange={(e) => { setSelectedPalette(e.target.value); setShowPaletteEditor(false); }}
@@ -293,7 +316,7 @@ export default function GenerativeArtPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm mb-1">Color Mode</label>
+                  <label className="block text-sm mb-1">Mode</label>
                   <select
                     value={colorMode}
                     onChange={(e) => setColorMode(e.target.value)}
@@ -307,7 +330,7 @@ export default function GenerativeArtPage() {
                   onClick={() => setShowPaletteEditor(!showPaletteEditor)}
                   className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded transition"
                 >
-                  {showPaletteEditor ? 'Use Preset' : 'Create Custom Palette'}
+                  {showPaletteEditor ? 'Use Preset' : 'Custom Palette'}
                 </button>
               </div>
             </div>
@@ -315,10 +338,10 @@ export default function GenerativeArtPage() {
             {/* Custom Palette Editor */}
             {showPaletteEditor && (
               <div className="bg-gray-800 rounded-lg p-4">
-                <h2 className="text-xl font-semibold mb-4">Custom Palette</h2>
-                <div className="space-y-3">
+                <h2 className="text-xl font-semibold mb-3">Custom Palette</h2>
+                <div className="space-y-2">
                   <div>
-                    <label className="block text-sm mb-1">Palette Name</label>
+                    <label className="block text-sm mb-1">Name</label>
                     <input
                       type="text"
                       value={paletteName}
@@ -327,7 +350,7 @@ export default function GenerativeArtPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm mb-1">Add Color (Hex)</label>
+                    <label className="block text-sm mb-1">Add Color</label>
                     <div className="flex gap-2">
                       <input
                         type="color"
@@ -337,7 +360,6 @@ export default function GenerativeArtPage() {
                       <input
                         type="text"
                         placeholder="#000000"
-                        pattern="^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$"
                         onKeyPress={(e) => {
                           if (e.key === 'Enter' && e.target.value.match(/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/)) {
                             addColorToPalette(e.target.value);
@@ -349,8 +371,8 @@ export default function GenerativeArtPage() {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-sm mb-1">Current Colors ({customPalette.length}/10)</label>
-                    <div className="flex flex-wrap gap-2 mt-2">
+                    <label className="block text-sm mb-1">Colors ({customPalette.length}/10)</label>
+                    <div className="flex flex-wrap gap-2 mt-1">
                       {customPalette.map((color, index) => (
                         <div key={index} className="relative group">
                           <div
@@ -380,34 +402,30 @@ export default function GenerativeArtPage() {
                 Export SVG (mm)
               </button>
               <p className="text-xs text-gray-400 mt-2 text-center">
-                Exports with dimensions in millimetres for precise printing
+                Exports with dimensions in millimetres
               </p>
-            </div>
-
-            {/* Info */}
-            <div className="bg-gray-800 rounded-lg p-4 text-sm">
-              <h2 className="text-xl font-semibold mb-2">Generated Tiles</h2>
-              <p className="text-gray-400">{tiles.length} tiles</p>
             </div>
           </div>
 
           {/* Canvas */}
           <div className="lg:col-span-2">
             <div className="bg-gray-800 rounded-lg p-4">
-              <div className="bg-white rounded-lg overflow-hidden" style={{ aspectRatio: `${canvasWidth}/${canvasHeight}` }}>
+              <div className="relative bg-white rounded-lg overflow-hidden" style={{ aspectRatio: `${canvasWidth}/${canvasHeight}` }}>
                 <svg
                   ref={svgRef}
                   width="100%"
                   height="100%"
-                  viewBox={`0 0 ${mmToPx(canvasWidth)} ${mmToPx(canvasHeight)}`}
+                  viewBox={viewBox}
                   preserveAspectRatio="xMidYMid meet"
                   style={{ display: 'block' }}
                 >
-                  {tiles.map(renderTile)}
+                  {tiles.map((tile) => (
+                    <Tile key={tile.id} tile={tile} colorMode={colorMode} />
+                  ))}
                 </svg>
               </div>
               <div className="mt-2 text-sm text-gray-400 text-center">
-                Canvas: {canvasWidth}mm × {canvasHeight}mm | Scale: 1:{Math.round(mmToPx(canvasWidth) / 400)}
+                {canvasWidth}mm × {canvasHeight}mm | {tiles.length} tiles
               </div>
             </div>
           </div>
@@ -416,4 +434,3 @@ export default function GenerativeArtPage() {
     </div>
   );
 }
-
